@@ -89,6 +89,7 @@ type Factory struct {
 	ip     string
 	port   int
 	iface  string
+	mac    string
 	cli    *resty.Client
 	key    []byte
 }

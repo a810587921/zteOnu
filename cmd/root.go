@@ -21,6 +21,7 @@ var (
 	telnetPort int
 	newMode    bool
 	iface      string
+	mac        string
 
 	rootCmd = &cobra.Command{
 		Use: "zteOnu",
@@ -41,21 +42,24 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&telnetPort, "tp", 23, "ONU telnet port")
 	rootCmd.PersistentFlags().BoolVar(&newMode, "new", false, "use new method to open telnet; the SendInfo payload is derived from the current interface MAC")
 	rootCmd.PersistentFlags().StringVar(&iface, "iface", "", "network interface to read the MAC from (default: first non-loopback interface)")
+	rootCmd.PersistentFlags().StringVarP(&mac, "mac", "m", "", "custom client MAC address used to derive the SendInfo payload (e.g. 00:07:29:55:35:57); defaults to the interface MAC")
 }
 
 func run() error {
 	version.Show()
 
+	fac := factory.New(user, passwd, ip, port, iface, mac)
+
 	if newMode {
-		// The SendInfo payload is now derived from the current interface MAC
+		// The SendInfo payload is now derived from the client MAC
 		// (see factory.MacToMagicBytes), so any MAC the device accepts works.
 		// We only need to make sure a usable MAC is actually present.
-		if _, err := factory.LocalMAC(iface); err != nil {
-			return fmt.Errorf("new mode requires a usable network interface MAC: %w", err)
+		if _, err := fac.ClientMAC(); err != nil {
+			return fmt.Errorf("new mode requires a usable MAC (provide --mac or a network interface): %w", err)
 		}
 	}
 
-	tlUser, tlPass, err := factory.New(user, passwd, ip, port, iface).Handle()
+	tlUser, tlPass, err := fac.Handle()
 	if err != nil {
 		return err
 	}

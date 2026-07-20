@@ -14,13 +14,14 @@ import (
 	"github.com/septrum101/zteOnu/utils"
 )
 
-func New(user string, passwd string, ip string, port int, iface string) *Factory {
+func New(user string, passwd string, ip string, port int, iface string, mac string) *Factory {
 	return &Factory{
 		user:   user,
 		passwd: passwd,
 		ip:     ip,
 		port:   port,
 		iface:  iface,
+		mac:    mac,
 		cli: resty.New().SetHeader("User-Agent", "curl/8.8.0-DEV").
 			SetBaseURL(fmt.Sprintf("http://%s:%d", ip, port)),
 	}
@@ -134,9 +135,28 @@ func LocalMAC(iface string) ([6]byte, error) {
 	return [6]byte{}, fmt.Errorf("interface %q has no usable 6-byte MAC address", iface)
 }
 
+// ClientMAC returns the MAC address used to derive the SendInfo payload. If a
+// custom MAC was supplied via New, it is returned (after validation); otherwise
+// the MAC is derived from the local interface via LocalMAC.
+func (f *Factory) ClientMAC() ([6]byte, error) {
+	if f.mac != "" {
+		hw, err := net.ParseMAC(f.mac)
+		if err != nil {
+			return [6]byte{}, fmt.Errorf("invalid MAC %q: %w", f.mac, err)
+		}
+		if len(hw) != 6 {
+			return [6]byte{}, fmt.Errorf("MAC %q must be 6 bytes, got %d", f.mac, len(hw))
+		}
+		var m [6]byte
+		copy(m[:], hw)
+		return m, nil
+	}
+	return LocalMAC(f.iface)
+}
+
 func (f *Factory) sendInfo() error {
 	command := []byte("SendInfo.gch?info=12|")
-	mac, err := LocalMAC(f.iface)
+	mac, err := f.ClientMAC()
 	if err != nil {
 		return err
 	}
