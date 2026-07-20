@@ -4,8 +4,56 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// mac address 00-07-29-55-35-57
-const magicBytesBase64 = "AAAAAGAIAACTBwAAOggAALoAAACQBwAAxAcAAMoGAACVBAAATggAAM0BAAAnCA=="
+// magicPayloadReference is the originally captured SendInfo magic payload for
+// the MAC 00:07:29:55:35:57 (see the macvm reverse-engineering notes). The
+// server recovers the client MAC from this payload and memcmp()s it against the
+// device MAC.
+//
+// The payload is 46 bytes laid out as 12 little-endian uint16 "values", each
+// followed by two zero bytes (a 4-byte group). The MAC is folded into the
+// value bytes: value j (0..11) maps to MAC byte j/2, and both bytes of that
+// value are XORed with that MAC byte. The two zero bytes of every group are
+// fixed framing and never carry MAC data. This matches "info=12" (12 values =
+// 6 MAC bytes * 2 values per byte).
+//
+// We therefore derive the device-independent frame once and recompute the
+// payload for any MAC, so the tool works with whatever MAC the interface is
+// currently set to (no need to spoof 00:07:29:55:35:57 specifically).
+var magicPayloadReference = []byte{
+	0x00, 0x00, 0x00, 0x00, 0x60, 0x08, 0x00, 0x00, 0x93, 0x07, 0x00, 0x00,
+	0x3a, 0x08, 0x00, 0x00, 0xba, 0x00, 0x00, 0x00, 0x90, 0x07, 0x00, 0x00,
+	0xc4, 0x07, 0x00, 0x00, 0xca, 0x06, 0x00, 0x00, 0x95, 0x04, 0x00, 0x00,
+	0x4e, 0x08, 0x00, 0x00, 0xcd, 0x01, 0x00, 0x00, 0x27, 0x08,
+}
+
+// magicPayloadRefMAC is the MAC the reference payload above was captured for.
+var magicPayloadRefMAC = [6]byte{0x00, 0x07, 0x29, 0x55, 0x35, 0x57}
+
+// magicPayloadFrame is the device-independent part of the payload, derived from
+// the reference payload and its MAC. value[j] = frame[j] ^ mac[j/2].
+var magicPayloadFrame [24]byte
+
+func init() {
+	for j := range 12 {
+		m := magicPayloadRefMAC[j/2]
+		magicPayloadFrame[2*j] = magicPayloadReference[4*j] ^ m
+		magicPayloadFrame[2*j+1] = magicPayloadReference[4*j+1] ^ m
+	}
+}
+
+// MacToMagicBytes builds the SendInfo magic payload for the given client MAC.
+// It XORs the device-independent frame with the MAC (2 values per MAC byte)
+// while preserving the fixed zero framing, reproducing the captured payload
+// exactly when mac == 00:07:29:55:35:57.
+func MacToMagicBytes(mac [6]byte) []byte {
+	out := make([]byte, len(magicPayloadReference))
+	for j := range 12 {
+		m := mac[j/2]
+		out[4*j] = magicPayloadFrame[2*j] ^ m
+		out[4*j+1] = magicPayloadFrame[2*j+1] ^ m
+	}
+	return out
+}
 
 var (
 	AesKeyPool = []byte{
@@ -40,6 +88,7 @@ type Factory struct {
 	passwd string
 	ip     string
 	port   int
+	iface  string
 	cli    *resty.Client
 	key    []byte
 }

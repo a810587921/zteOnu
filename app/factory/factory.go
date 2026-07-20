@@ -1,9 +1,9 @@
 package factory
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -11,15 +11,16 @@ import (
 
 	"github.com/go-resty/resty/v2"
 
-	"github.com/thank243/zteOnu/utils"
+	"github.com/septrum101/zteOnu/utils"
 )
 
-func New(user string, passwd string, ip string, port int) *Factory {
+func New(user string, passwd string, ip string, port int, iface string) *Factory {
 	return &Factory{
 		user:   user,
 		passwd: passwd,
 		ip:     ip,
 		port:   port,
+		iface:  iface,
 		cli: resty.New().SetHeader("User-Agent", "curl/8.8.0-DEV").
 			SetBaseURL(fmt.Sprintf("http://%s:%d", ip, port)),
 	}
@@ -106,12 +107,40 @@ func (f *Factory) checkLoginAuth() error {
 	}
 }
 
+// LocalMAC returns the MAC address used to derive the SendInfo payload.
+// If iface is empty, the first usable (non-loopback) interface with a 6-byte
+// MAC is used; otherwise the MAC of the named interface is returned.
+func LocalMAC(iface string) ([6]byte, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return [6]byte{}, err
+	}
+	for _, i := range ifaces {
+		if iface != "" && i.Name != iface {
+			continue
+		}
+		if iface == "" && i.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if len(i.HardwareAddr) == 6 {
+			var m [6]byte
+			copy(m[:], i.HardwareAddr)
+			return m, nil
+		}
+	}
+	if iface == "" {
+		return [6]byte{}, errors.New("no suitable network interface MAC address found")
+	}
+	return [6]byte{}, fmt.Errorf("interface %q has no usable 6-byte MAC address", iface)
+}
+
 func (f *Factory) sendInfo() error {
 	command := []byte("SendInfo.gch?info=12|")
-	magicBytes, err := base64.StdEncoding.DecodeString(magicBytesBase64)
+	mac, err := LocalMAC(f.iface)
 	if err != nil {
 		return err
 	}
+	magicBytes := MacToMagicBytes(mac)
 	command = append(command, magicBytes...)
 
 	payload, err := utils.ECBEncrypt(command, f.key)
@@ -170,25 +199,22 @@ func (f *Factory) handle() (tlUser string, tlPass string, err error) {
 	fmt.Print("step [0] reset factory: ")
 	if err = f.reset(); err != nil {
 		return
-	} else {
-		fmt.Println("ok")
 	}
+	fmt.Println("ok")
 
 	fmt.Print("step [1] request factory mode: ")
 	if err = f.reqFactoryMode(); err != nil {
 		return
-	} else {
-		fmt.Println("ok")
 	}
+	fmt.Println("ok")
 
 	var ver uint8
 	fmt.Print("step [2] send sq: ")
 	ver, err = f.sendSq()
 	if err != nil {
 		return
-	} else {
-		fmt.Println("ok")
 	}
+	fmt.Println("ok")
 
 	fmt.Print("step [3] check login auth: ")
 	switch ver {
@@ -210,9 +236,8 @@ func (f *Factory) handle() (tlUser string, tlPass string, err error) {
 	tlUser, tlPass, err = f.factoryMode()
 	if err != nil {
 		return
-	} else {
-		fmt.Println("ok")
 	}
+	fmt.Println("ok")
 
 	fmt.Println(strings.Repeat("-", 35))
 
